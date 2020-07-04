@@ -12,3 +12,9 @@ addExample(FunctionWritingExample)
 addExample(LeastSquaresExample)
 addExample(ProblemWritingExample ../tests/SolverTestFunctions.cpp)
 addExample(TaskDynamicsExample)
+
+# add Hrp5pExample
+find_package(roscpp REQUIRED)
+add_required_dependency(roscpp)
+addExample(Hrp5pExample)
+pkg_config_use_dependency(Hrp5pExample roscpp)
