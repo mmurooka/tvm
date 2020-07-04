@@ -35,11 +35,77 @@
 #include <iostream>
 
 #include <ros/ros.h>
+#include <ros/package.h>
 
+#include "Hrp5pSetting.h"
+
+
+class Hrp5pExample
+{
+ public:
+  Hrp5pExample():
+      clock_(std::make_shared<tvm::Clock>(dt_))
+  {
+    setupRobot();
+  }
+
+  void run()
+  {
+    publishRobotState(*robot_);
+  }
+
+ protected:
+  void setupRobot()
+  {
+    // setup robot
+    std::string robot_name = "HRP5P";
+    std::string robot_urdf = ros::package::getPath("hrp5_p_description") + "/urdf/hrp5_p_planH.urdf";
+
+    robot_ = tvm::robot::fromURDF(
+        *clock_,
+        robot_name,
+        robot_urdf,
+        false,
+        hrp5p_filtered_link_names,
+        hrp5p_initial_q);
+
+    // setup env
+    std::string env_urdf = ros::package::getPath("mc_env_description") + "/urdf/ground.urdf";
+
+    env_ = tvm::robot::fromURDF(
+        *clock_,
+        "env",
+        env_urdf,
+        true,
+        {},
+        {});
+  }
+
+  void publishRobotState(const tvm::Robot& robot)
+  {
+    for (const auto& joint : robot.mb().joints()) {
+      if (joint.dof() == 1) {
+        int joint_idx = robot.mb().jointIndexByName(joint.name());
+        double joint_pos = robot.mbc().q[joint_idx][0];
+        printf("%s: %lf\n", joint.name().c_str(), joint_pos);
+      }
+    }
+  }
+
+  double dt_ = 0.005; // [sec]
+
+  tvm::ControlProblem pb_;
+  std::shared_ptr<tvm::Clock> clock_;
+
+  tvm::RobotPtr robot_;
+  tvm::RobotPtr env_;
+};
 
 int main(int argc, char **argv)
 {
   ros::init(argc, argv, "Hrp5pExample");
 
-  tvm::ControlProblem pb;
+  Hrp5pExample example;
+
+  example.run();
 }

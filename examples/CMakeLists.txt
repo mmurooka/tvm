@@ -15,6 +15,9 @@ addExample(TaskDynamicsExample)
 
 # add Hrp5pExample
 find_package(roscpp REQUIRED)
+find_package(roslib REQUIRED)
 add_required_dependency(roscpp)
+add_required_dependency(roslib)
 addExample(Hrp5pExample)
 pkg_config_use_dependency(Hrp5pExample roscpp)
+pkg_config_use_dependency(Hrp5pExample roslib)
