@@ -140,10 +140,8 @@ class Hrp5pExample
         contact_map_["RightFootGround"], Eigen::Matrix6d::Identity());
     auto posture_fn = std::make_shared<tvm::robot::PostureFunction>(robot_);
 
-    auto ori_fn = std::make_shared<tvm::robot::OrientationFunction>(frame_map_["LeftHand"]);
-    ori_fn->orientation(sva::RotY(-tvm::constant::pi/2));
-    auto pos_fn = std::make_shared<tvm::robot::PositionFunction>(frame_map_["LeftHand"]);
-    pos_fn->position(pos_fn->position() + Eigen::Vector3d{0.3, -0.1, 0.2});
+    left_hand_ori_fn_ = std::make_shared<tvm::robot::OrientationFunction>(frame_map_["LeftHand"]);
+    left_hand_pos_fn_ = std::make_shared<tvm::robot::PositionFunction>(frame_map_["LeftHand"]);
 
     // add task to problem
     pb_.add(left_foot_contact_fn == 0.,
@@ -155,10 +153,10 @@ class Hrp5pExample
     pb_.add(posture_fn == 0.,
             tvm::task_dynamics::PD(1.),
       {tvm::requirements::PriorityLevel(1), tvm::requirements::Weight(1.)});
-    pb_.add(ori_fn == 0.,
+    pb_.add(left_hand_ori_fn_ == 0.,
             tvm::task_dynamics::PD(2.),
       {tvm::requirements::PriorityLevel(1), tvm::requirements::Weight(10.)});
-    pb_.add(pos_fn == 0.,
+    pb_.add(left_hand_pos_fn_ == 0.,
             tvm::task_dynamics::PD(1.),
       {tvm::requirements::PriorityLevel(1), tvm::requirements::Weight(10.)});
 
@@ -182,18 +180,28 @@ class Hrp5pExample
 
     tvm::scheme::WeightedLeastSquares solver(tvm::solver::DefaultLSSolverOptions{});
 
-    int loop_num = 1000;
+    int loop_num = 10000;
     ros::Rate rate(static_cast<int>(1.0 / dt_));
     std::cout << "Will run solver for " << loop_num << " iterations" << std::endl;
-    for (int i = 0; i < loop_num; ++i) {
-      bool res = solver.solve(lpb);
-      clock_->advance();
 
+    // loop
+    for (int i = 0; i < loop_num; ++i) {
+      // update target
+      left_hand_ori_fn_->orientation(sva::RotY(-tvm::constant::pi/2));
+      left_hand_pos_fn_->position(Eigen::Vector3d{0.5, 0.3, 1.0+0.2*std::sin(i/100.0)});
+      // left_hand_pos_fn_->position(left_hand_pos_fn_->position() + Eigen::Vector3d{0.3, -0.1, 0.2});
+
+      // solve
+      bool res = solver.solve(lpb);
       if (!res) {
         std::cerr << "Solver failed" << std::endl;
         break;
       }
 
+      // integrate
+      clock_->advance();
+
+      // process ROS
       publishRobotState(*robot_);
       ros::spinOnce();
       rate.sleep();
@@ -255,6 +263,9 @@ class Hrp5pExample
 
   std::map<std::string, std::shared_ptr<tvm::robot::Frame> > frame_map_;
   std::map<std::string, std::shared_ptr<tvm::robot::Contact> > contact_map_;
+
+  std::shared_ptr<tvm::robot::OrientationFunction> left_hand_ori_fn_;
+  std::shared_ptr<tvm::robot::PositionFunction> left_hand_pos_fn_;
 
   ros::NodeHandle nh_;
   ros::Publisher robot_state_pub_;
