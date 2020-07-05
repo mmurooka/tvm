@@ -38,6 +38,7 @@
 #include <ros/ros.h>
 #include <ros/package.h>
 #include <ros/console.h>
+#include <geometry_msgs/PoseArray.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Transform.h>
 #include <moveit_msgs/DisplayRobotState.h>
@@ -144,7 +145,7 @@ class Hrp5pExample
     auto posture_fn = std::make_shared<tvm::robot::PostureFunction>(robot_);
 
     auto com_in_fn = std::make_shared<tvm::robot::CoMInConvexFunction>(robot_);
-    auto cube = makeCube(robot_->com(), 0.05);
+    auto cube = makeCube(robot_->com(), 0.05, 0.05, 1.0);
     for (const auto& p : cube) {
       com_in_fn->addPlane(p);
     }
@@ -184,8 +185,9 @@ class Hrp5pExample
   void setupRos()
   {
     robot_state_pub_ = nh_.advertise<moveit_msgs::DisplayRobotState>("display_robot_state", 1);
+    pose_arr_pub_ = nh_.advertise<geometry_msgs::PoseArray>("robot_pose_array", 1);
 
-    pose_sub_ = nh_.subscribe("interactive_marker_pose", 1, &Hrp5pExample::PoseCallback, this);
+    pose_sub_ = nh_.subscribe("interactive_marker_pose", 1, &Hrp5pExample::poseCallback, this);
   }
 
   void solve()
@@ -209,6 +211,7 @@ class Hrp5pExample
 
       // process ROS
       publishRobotState(*robot_);
+      publishPose(*robot_);
       ros::spinOnce();
       // rate.sleep();
     }
@@ -248,7 +251,41 @@ class Hrp5pExample
     robot_state_pub_.publish(robot_state_msg);
   }
 
-  void PoseCallback(const geometry_msgs::PoseStamped::ConstPtr& pose_st_msg)
+  void publishPose(const tvm::Robot& robot)
+  {
+    geometry_msgs::PoseArray pose_arr_msg;
+    pose_arr_msg.header.frame_id = "world";
+
+    // set left hand
+    geometry_msgs::Pose left_hand_pose_msg;
+    const Eigen::Vector3d& left_hand_pos = frame_map_["LeftHand"]->position().translation();
+    Eigen::Quaterniond left_hand_quat(frame_map_["LeftHand"]->position().rotation());
+    left_hand_pose_msg.position.x = left_hand_pos.x();
+    left_hand_pose_msg.position.y = left_hand_pos.y();
+    left_hand_pose_msg.position.z = left_hand_pos.z();
+    left_hand_pose_msg.orientation.w = left_hand_quat.w();
+    left_hand_pose_msg.orientation.x = left_hand_quat.x();
+    left_hand_pose_msg.orientation.y = left_hand_quat.y();
+    left_hand_pose_msg.orientation.z = left_hand_quat.z();
+    pose_arr_msg.poses.push_back(left_hand_pose_msg);
+
+    // set com
+    geometry_msgs::Pose com_pose_msg;
+    const Eigen::Quaterniond com_quat(frame_map_["LeftHand"]->position().rotation());
+    com_pose_msg.position.x = robot.com().x();
+    com_pose_msg.position.y = robot.com().y();
+    com_pose_msg.position.z = robot.com().z();
+    com_pose_msg.orientation.w = 1;
+    com_pose_msg.orientation.x = 0;
+    com_pose_msg.orientation.y = 0;
+    com_pose_msg.orientation.z = 0;
+    pose_arr_msg.poses.push_back(com_pose_msg);
+
+    // publish
+    pose_arr_pub_.publish(pose_arr_msg);
+  }
+
+  void poseCallback(const geometry_msgs::PoseStamped::ConstPtr& pose_st_msg)
   {
     // update target
     left_hand_ori_fn_->orientation(
@@ -277,15 +314,18 @@ class Hrp5pExample
   }
 
   // Build a cube as a set of planes from a given origin and size
-  std::vector<tvm::geometry::PlanePtr> makeCube(const Eigen::Vector3d & origin, double size)
+  std::vector<tvm::geometry::PlanePtr> makeCube(const Eigen::Vector3d & origin,
+                                                double x_size,
+                                                double y_size,
+                                                double z_size)
   {
     return {
-      std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{1, 0, 0}, origin + Eigen::Vector3d{-size, 0, 0}),
-          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{-1, 0, 0}, origin + Eigen::Vector3d{size, 0, 0}),
-          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, 1, 0}, origin + Eigen::Vector3d{0, -size, 0}),
-          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, -1, 0}, origin + Eigen::Vector3d{0, size, 0}),
-          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, 0, 1}, origin + Eigen::Vector3d{0, 0, -size}),
-          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, 0, -1}, origin + Eigen::Vector3d{0, 0, size})
+      std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{1, 0, 0}, origin + Eigen::Vector3d{-x_size, 0, 0}),
+          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{-1, 0, 0}, origin + Eigen::Vector3d{x_size, 0, 0}),
+          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, 1, 0}, origin + Eigen::Vector3d{0, -y_size, 0}),
+          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, -1, 0}, origin + Eigen::Vector3d{0, y_size, 0}),
+          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, 0, 1}, origin + Eigen::Vector3d{0, 0, -z_size}),
+          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, 0, -1}, origin + Eigen::Vector3d{0, 0, z_size})
           };
   }
 
@@ -306,6 +346,7 @@ class Hrp5pExample
 
   ros::NodeHandle nh_;
   ros::Publisher robot_state_pub_;
+  ros::Publisher pose_arr_pub_;
   ros::Subscriber pose_sub_;
 };
 
