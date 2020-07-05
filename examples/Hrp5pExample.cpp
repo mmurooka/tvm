@@ -23,6 +23,7 @@
 #include <tvm/solver/defaultLeastSquareSolver.h>
 #include <tvm/solver/QuadprogLeastSquareSolver.h>
 #include <tvm/task_dynamics/None.h>
+#include <tvm/task_dynamics/Proportional.h>
 #include <tvm/task_dynamics/ProportionalDerivative.h>
 #include <tvm/task_dynamics/VelocityDamper.h>
 #include <tvm/utils/sch.h>
@@ -36,6 +37,8 @@
 
 #include <ros/ros.h>
 #include <ros/package.h>
+#include <ros/console.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Transform.h>
 #include <moveit_msgs/DisplayRobotState.h>
 
@@ -140,6 +143,12 @@ class Hrp5pExample
         contact_map_["RightFootGround"], Eigen::Matrix6d::Identity());
     auto posture_fn = std::make_shared<tvm::robot::PostureFunction>(robot_);
 
+    auto com_in_fn = std::make_shared<tvm::robot::CoMInConvexFunction>(robot_);
+    auto cube = makeCube(robot_->com(), 0.05);
+    for (const auto& p : cube) {
+      com_in_fn->addPlane(p);
+    }
+
     left_hand_ori_fn_ = std::make_shared<tvm::robot::OrientationFunction>(frame_map_["LeftHand"]);
     left_hand_pos_fn_ = std::make_shared<tvm::robot::PositionFunction>(frame_map_["LeftHand"]);
 
@@ -152,13 +161,16 @@ class Hrp5pExample
       {tvm::requirements::PriorityLevel(0)});
     pb_.add(posture_fn == 0.,
             tvm::task_dynamics::PD(1.),
-      {tvm::requirements::PriorityLevel(1), tvm::requirements::Weight(1.)});
+      {tvm::requirements::PriorityLevel(1), tvm::requirements::Weight(1e-4)});
     pb_.add(left_hand_ori_fn_ == 0.,
-            tvm::task_dynamics::PD(2.),
-      {tvm::requirements::PriorityLevel(1), tvm::requirements::Weight(10.)});
+            tvm::task_dynamics::PD(1.),
+      {tvm::requirements::PriorityLevel(1), tvm::requirements::Weight(1.)});
     pb_.add(left_hand_pos_fn_ == 0.,
             tvm::task_dynamics::PD(1.),
-      {tvm::requirements::PriorityLevel(1), tvm::requirements::Weight(10.)});
+      {tvm::requirements::PriorityLevel(1), tvm::requirements::Weight(1.)});
+    pb_.add(com_in_fn >= 0.,
+            tvm::task_dynamics::VelocityDamper(dt_, {0.005, 0.001, 0}, tvm::constant::big_number),
+            {tvm::requirements::PriorityLevel(0)});
 
     // set bounds
     pb_.add(robot_->lQBound() <= robot_->qJoints() <= robot_->uQBound(),
@@ -172,6 +184,8 @@ class Hrp5pExample
   void setupRos()
   {
     robot_state_pub_ = nh_.advertise<moveit_msgs::DisplayRobotState>("display_robot_state", 1);
+
+    pose_sub_ = nh_.subscribe("interactive_marker_pose", 1, &Hrp5pExample::PoseCallback, this);
   }
 
   void solve()
@@ -180,21 +194,13 @@ class Hrp5pExample
 
     tvm::scheme::WeightedLeastSquares solver(tvm::solver::DefaultLSSolverOptions{});
 
-    int loop_num = 10000;
-    ros::Rate rate(static_cast<int>(1.0 / dt_));
-    std::cout << "Will run solver for " << loop_num << " iterations" << std::endl;
-
     // loop
-    for (int i = 0; i < loop_num; ++i) {
-      // update target
-      left_hand_ori_fn_->orientation(sva::RotY(-tvm::constant::pi/2));
-      left_hand_pos_fn_->position(Eigen::Vector3d{0.5, 0.3, 1.0+0.2*std::sin(i/100.0)});
-      // left_hand_pos_fn_->position(left_hand_pos_fn_->position() + Eigen::Vector3d{0.3, -0.1, 0.2});
-
+    ros::Rate rate(static_cast<int>(1.0 / dt_));
+    while (ros::ok()) {
       // solve
       bool res = solver.solve(lpb);
       if (!res) {
-        std::cerr << "Solver failed" << std::endl;
+        ROS_ERROR("Solver failed");
         break;
       }
 
@@ -204,7 +210,7 @@ class Hrp5pExample
       // process ROS
       publishRobotState(*robot_);
       ros::spinOnce();
-      rate.sleep();
+      // rate.sleep();
     }
   }
 
@@ -242,6 +248,23 @@ class Hrp5pExample
     robot_state_pub_.publish(robot_state_msg);
   }
 
+  void PoseCallback(const geometry_msgs::PoseStamped::ConstPtr& pose_st_msg)
+  {
+    // update target
+    left_hand_ori_fn_->orientation(
+        Eigen::Quaterniond{
+          pose_st_msg->pose.orientation.w,
+              pose_st_msg->pose.orientation.x,
+              pose_st_msg->pose.orientation.y,
+              pose_st_msg->pose.orientation.z
+              }.toRotationMatrix());
+    left_hand_pos_fn_->position(
+        Eigen::Vector3d{
+          pose_st_msg->pose.position.x,
+              pose_st_msg->pose.position.y,
+              pose_st_msg->pose.position.z});
+  }
+
   void pushToFrameMap(const std::shared_ptr<tvm::robot::Frame>& frame)
   {
     frame_map_[frame->name()] = frame;
@@ -252,6 +275,20 @@ class Hrp5pExample
   {
     contact_map_[name] = contact;
   }
+
+  // Build a cube as a set of planes from a given origin and size
+  std::vector<tvm::geometry::PlanePtr> makeCube(const Eigen::Vector3d & origin, double size)
+  {
+    return {
+      std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{1, 0, 0}, origin + Eigen::Vector3d{-size, 0, 0}),
+          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{-1, 0, 0}, origin + Eigen::Vector3d{size, 0, 0}),
+          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, 1, 0}, origin + Eigen::Vector3d{0, -size, 0}),
+          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, -1, 0}, origin + Eigen::Vector3d{0, size, 0}),
+          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, 0, 1}, origin + Eigen::Vector3d{0, 0, -size}),
+          std::make_shared<tvm::geometry::Plane>(Eigen::Vector3d{0, 0, -1}, origin + Eigen::Vector3d{0, 0, size})
+          };
+  }
+
 
   double dt_ = 0.005; // [sec]
 
@@ -269,6 +306,7 @@ class Hrp5pExample
 
   ros::NodeHandle nh_;
   ros::Publisher robot_state_pub_;
+  ros::Subscriber pose_sub_;
 };
 
 int main(int argc, char **argv)
